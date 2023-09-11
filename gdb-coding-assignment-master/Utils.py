@@ -1,5 +1,8 @@
-
+from http import HTTPStatus
 from typing import List
+
+from Exceptions import HttpResponseException
+from FeaturedSong import FeaturedSong
 
 ALBUM_KEY = 'album'
 ARTISTS_KEY = 'artists'
@@ -12,6 +15,9 @@ PLAYLIST_RANK_KEY = 'playlist_rank'
 TRACK_RANK_KEY = 'track_rank'
 ARTISTS_NAMES_KEY = 'artist_names'
 TOTAL_TRACKS_KEY = 'total_tracks'
+ID_KEY = 'id'
+ALBUM_NAME_KEY = 'album_name'
+ALBUM_TRACKS_KEY = 'album_tracks'
 
 
 def is_track_in_album(track) -> bool:
@@ -60,6 +66,35 @@ def update_params_with_album(fields_dict: dict, track) -> dict:
     album = track[ALBUM_KEY]
     album_name = album[NAME_KEY]
     album_tracks = album[TOTAL_TRACKS_KEY]
-    fields_dict['album_name'] = album_name
-    fields_dict['album_tracks'] = album_tracks
+    fields_dict[ALBUM_NAME_KEY] = album_name
+    fields_dict[ALBUM_TRACKS_KEY] = album_tracks
     return fields_dict
+
+
+def build_song(playlist_id: str, playlist, playlist_index: int, current_track,
+               track_index: int) -> FeaturedSong:
+    """
+    Builds a new FeaturedSong object containing all the data provided
+    """
+    track_id = current_track[ID_KEY]
+    track_name = current_track[NAME_KEY]
+    playlist_name = playlist[NAME_KEY]
+    artist_names = get_artist_names(current_track)
+    fields_dict = build_required_fields_dict(track_id=track_id, track_name=track_name, playlist_name=playlist_name,
+                                             playlist_id=playlist_id, playlist_index=playlist_index,
+                                             track_index=track_index, artist_names=artist_names)
+
+    if is_track_in_album(current_track):
+        fields_dict = update_params_with_album(fields_dict, current_track)
+
+    song: FeaturedSong = FeaturedSong(**fields_dict)
+
+    return song
+
+
+def check_response_code(response) -> None:
+    """
+    Raises exception if response code is not OK
+    """
+    if response.status_code != HTTPStatus.OK:
+        raise HttpResponseException(response.status_code, response.text)

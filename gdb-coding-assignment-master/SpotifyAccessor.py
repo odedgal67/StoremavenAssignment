@@ -1,8 +1,12 @@
+import asyncio
+import aiohttp
+import requests
 from http import HTTPStatus
 from typing import List
-import requests
+from Accessor import Accessor
 from Exceptions import *
-
+from FeaturedSong import FeaturedSong
+from Utils import build_song, check_response_code
 
 ACCESS_TOKEN_URL = "https://accounts.spotify.com/api/token"
 ACCESS_TOKEN_KEY = "access_token"
@@ -11,11 +15,14 @@ CATEGORIES_KEY = 'categories'
 ITEMS_KEY = 'items'
 NAME_KEY = 'name'
 TRACKS_KEY = 'tracks'
+TRACK_KEY = 'track'
 COUNTRY_KEY = 'country'
 PLAYLISTS_KEY = 'playlists'
+HREF_KEY = 'href'
+ID_KEY = 'id'
 
 
-class SpotifyAccessor:
+class SpotifyAccessor(Accessor):
     def __init__(self, client_id: str, client_secret: str):
         self.access_token: str = ""
         self.client_id: str = client_id
@@ -65,12 +72,16 @@ class SpotifyAccessor:
             categories_names.append(name)
         return categories_names
 
-    def __check_response_code(self, response) -> None:
+    async def __get_playlist_tracks(self, playlist_href):
         """
-        Raises exception if response code is not OK
+        :param playlist_href: Playlist url
+        :return: All tracks in playlist
         """
-        if response.status_code != HTTPStatus.OK:
-            raise HttpResponseException(response.status_code, response.text)
+        async with aiohttp.ClientSession() as session:
+            async with session.get(playlist_href, headers=self.__get_header_with_token()) as playlist_response:
+                data = await playlist_response.json()
+                tracks = data[TRACKS_KEY][ITEMS_KEY]
+        return tracks
 
     def is_invalid_category(self, category: str):
         """
@@ -78,15 +89,6 @@ class SpotifyAccessor:
         :return: Boolean
         """
         return category.lower() not in self.valid_categories
-
-    def get_playlist_tracks(self, playlist_href):
-        """
-        :param playlist_href: Playlist url
-        :return: All tracks in playlist
-        """
-        playlist_response = requests.get(playlist_href, headers=self.__get_header_with_token())
-        tracks = playlist_response.json()[TRACKS_KEY][ITEMS_KEY]
-        return tracks
 
     def get_playlists(self, category, country):
         """
@@ -98,7 +100,7 @@ class SpotifyAccessor:
         # Build http request params
         headers = self.__get_header_with_token()
         params = {"q": category, "type": "category"}
-        if country:
+        if country:  # Optional country in request params
             params[COUNTRY_KEY] = country
         get_playlists_url = f"https://api.spotify.com/v1/browse/categories/{category}/playlists"
 
@@ -106,8 +108,37 @@ class SpotifyAccessor:
         response = requests.get(get_playlists_url, headers=headers, params=params)
 
         # Extract playlists from response
-        self.__check_response_code(response)
+        check_response_code(response)
         category_data = response.json()
         playlists = category_data[PLAYLISTS_KEY][ITEMS_KEY]
 
         return playlists
+
+    async def get_all_tracks_from_playlists(self, playlists) -> List[FeaturedSong]:
+        """
+        Gets all tracks from playlists given. Requesting playlists tracks concurrently
+        :param playlists: list of playlists to tracks get from
+        :return: list of tracks (FeaturedSongs)
+        """
+
+        # Create concurrent tasks
+        tasks = list()
+        for playlist in playlists:
+            playlist_href = playlist[HREF_KEY]
+            tasks.append(self.__get_playlist_tracks(playlist_href))
+
+        # Run concurrently
+        results = await asyncio.gather(*tasks)
+
+        # Build list of featured songs
+        features_songs: List[FeaturedSong] = []
+        for playlist_index in range(len(results)):
+            playlist = playlists[playlist_index]
+            playlist_tracks: list = results[playlist_index]
+            playlist_id = playlist[ID_KEY]
+            for track_index, track in enumerate(playlist_tracks):
+                current_track = track[TRACK_KEY]
+                current_featured_song: FeaturedSong = build_song(playlist_id, playlist, playlist_index, current_track, track_index)
+                features_songs.append(current_featured_song)
+
+        return features_songs
